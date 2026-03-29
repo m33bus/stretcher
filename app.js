@@ -74,14 +74,14 @@ let floatPhase = 0;
 
 // tuned settings
 let sculptRadius = 0.30;
-let sculptStrength = 0.028;
+let sculptStrength = 0.015;
 
 const TOUCH_FORCE_MULTIPLIER = 0.20;
 const MOUSE_FORCE_MULTIPLIER = 1.0;
 const MAX_WORLD_DELTA_PER_STEP = 0.016;
 
-const SPRING_STIFFNESS = 26.0;
-const SPRING_DAMPING = 0.73;
+const SPRING_STIFFNESS = 50.0;
+const SPRING_DAMPING = 0.5;
 const MAX_OFFSET_FROM_BASE = 0.09;
 
 const loader = new GLTFLoader();
