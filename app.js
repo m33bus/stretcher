@@ -1,3 +1,5 @@
+// --- SPRINGY RUBBER VERSION ---
+
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -19,26 +21,6 @@ scene.add(camera);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.enablePan = false;
-controls.rotateSpeed = 0.7;
-controls.zoomSpeed = 0.9;
-controls.minDistance = 1.0;
-controls.maxDistance = 4.0;
-controls.target.set(0, 0.05, 0);
-
-const hemi = new THREE.HemisphereLight(0xffffff, 0x334466, 1.65);
-scene.add(hemi);
-
-const keyLight = new THREE.DirectionalLight(0xffffff, 1.5);
-keyLight.position.set(1.4, 1.7, 2.2);
-scene.add(keyLight);
-
-const rimLight = new THREE.DirectionalLight(0xffffff, 0.75);
-rimLight.position.set(-1.5, 0.5, -1.5);
-scene.add(rimLight);
-
-const fillLight = new THREE.PointLight(0xffffff, 0.55, 8);
-fillLight.position.set(0, -0.25, 1.3);
-scene.add(fillLight);
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
@@ -46,232 +28,129 @@ const dragPlane = new THREE.Plane();
 const planeHit = new THREE.Vector3();
 const dragStartPoint = new THREE.Vector3();
 const worldNormal = new THREE.Vector3();
-const hitPointWorld = new THREE.Vector3();
 const tempVec = new THREE.Vector3();
 const inverseMatrix = new THREE.Matrix4();
-const worldPos = new THREE.Vector3();
 
-let modelRoot = null;
 let sculptMesh = null;
-let basePositions = null;
-let isDraggingMesh = false;
-let dragPointerId = null;
-let sculptRadius = 0.22;
-let sculptStrength = 0.005;
-let lastLocalHit = new THREE.Vector3();
+let basePositions, offsets, velocities;
+
+let isDragging = false;
+let lastHit = new THREE.Vector3();
+
+let sculptRadius = 0.15;
+let sculptStrength = 0.05;
+
+// 🔥 spring settings
+const STIFFNESS = 12.0;
+const DAMPING = 0.82;
 
 const loader = new GLTFLoader();
-loader.load(
-  './assets/head.glb',
-  (gltf) => {
-    modelRoot = gltf.scene;
-    scene.add(modelRoot);
+loader.load('./assets/head.glb', (gltf) => {
+  const root = gltf.scene;
+  scene.add(root);
 
-    let largestMesh = null;
-    let largestScore = -Infinity;
+  root.traverse((c) => {
+    if (c.isMesh && !sculptMesh) sculptMesh = c;
+  });
 
-    modelRoot.traverse((child) => {
-      if (!child.isMesh) return;
-
-      child.castShadow = false;
-      child.receiveShadow = false;
-
-      if (child.material) {
-        child.material = child.material.clone();
-        child.material.needsUpdate = true;
-      }
-
-      const geo = child.geometry;
-      if (!geo.attributes.position) return;
-
-      geo.computeBoundingBox();
-      const bb = geo.boundingBox;
-      const size = new THREE.Vector3();
-      bb.getSize(size);
-      const score = size.x * size.y * size.z;
-
-      if (score > largestScore) {
-        largestScore = score;
-        largestMesh = child;
-      }
-    });
-
-    if (!largestMesh) {
-      console.warn('No editable mesh found in head.glb');
-      return;
-    }
-
-    sculptMesh = largestMesh;
-
-    if (sculptMesh.geometry.index) {
-      sculptMesh.geometry = sculptMesh.geometry.toNonIndexed();
-    } else {
-      sculptMesh.geometry = sculptMesh.geometry.clone();
-    }
-
-    sculptMesh.geometry.computeVertexNormals();
-    sculptMesh.geometry.attributes.position.setUsage(THREE.DynamicDrawUsage);
-    basePositions = sculptMesh.geometry.attributes.position.array.slice();
-
-    frameModel();
-  },
-  undefined,
-  (err) => {
-    console.error(err);
-    alert('Could not load ./assets/head.glb');
-  }
-);
-
-function frameModel() {
-  if (!modelRoot) return;
-
-  const box = new THREE.Box3().setFromObject(modelRoot);
-  const size = new THREE.Vector3();
-  const center = new THREE.Vector3();
-  box.getSize(size);
-  box.getCenter(center);
-
-  modelRoot.position.sub(center);
-  modelRoot.position.y -= size.y * 0.02;
-
-  const maxDim = Math.max(size.x, size.y, size.z);
-  const fitScale = 1.6 / maxDim;
-  modelRoot.scale.setScalar(fitScale);
-
-  const box2 = new THREE.Box3().setFromObject(modelRoot);
-  const size2 = new THREE.Vector3();
-  const center2 = new THREE.Vector3();
-  box2.getSize(size2);
-  box2.getCenter(center2);
-
-  controls.target.copy(center2);
-  camera.position.set(center2.x, center2.y + size2.y * 0.03, center2.z + size2.z * 1.85);
-  controls.minDistance = size2.z * 0.7;
-  controls.maxDistance = size2.z * 3.5;
-  sculptRadius = Math.max(size2.x, size2.y, size2.z) * 0.12;
-  controls.update();
-}
-
-function updatePointerFromEvent(event) {
-  const rect = renderer.domElement.getBoundingClientRect();
-  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-}
-
-function getMeshHit(event) {
-  if (!sculptMesh) return null;
-  updatePointerFromEvent(event);
-  raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObject(sculptMesh, false);
-  return hits[0] || null;
-}
-
-function startMeshDrag(event, hit) {
-  isDraggingMesh = true;
-  dragPointerId = event.pointerId;
-  controls.enabled = false;
-
-  hitPointWorld.copy(hit.point);
-  lastLocalHit.copy(sculptMesh.worldToLocal(hit.point.clone()));
-
-  worldNormal.copy(hit.face.normal).transformDirection(sculptMesh.matrixWorld).normalize();
-  dragPlane.setFromNormalAndCoplanarPoint(worldNormal, hit.point);
-
-  raycaster.setFromCamera(pointer, camera);
-  raycaster.ray.intersectPlane(dragPlane, dragStartPoint);
-}
-
-function applySculptDelta(newPlanePoint) {
   if (!sculptMesh) return;
 
-  const deltaWorld = tempVec.copy(newPlanePoint).sub(dragStartPoint);
-  if (deltaWorld.lengthSq() === 0) return;
+  let geo = sculptMesh.geometry;
+  geo = geo.index ? geo.toNonIndexed() : geo.clone();
+  sculptMesh.geometry = geo;
 
-  inverseMatrix.copy(sculptMesh.matrixWorld).invert();
-  const deltaLocal = deltaWorld.clone().transformDirection(inverseMatrix);
+  basePositions = geo.attributes.position.array.slice();
+  offsets = new Float32Array(basePositions.length);
+  velocities = new Float32Array(basePositions.length);
+});
 
-  const geometry = sculptMesh.geometry;
-  const posAttr = geometry.attributes.position;
-  const normalAttr = geometry.attributes.normal;
-  const positions = posAttr.array;
-
-  for (let i = 0; i < positions.length; i += 3) {
-    worldPos.set(positions[i], positions[i + 1], positions[i + 2]);
-    const dist = worldPos.distanceTo(lastLocalHit);
-    if (dist > sculptRadius) continue;
-
-    const falloff = 1 - dist / sculptRadius;
-    const influence = falloff * falloff * sculptStrength;
-
-    positions[i] += deltaLocal.x * influence;
-    positions[i + 1] += deltaLocal.y * influence;
-    positions[i + 2] += deltaLocal.z * influence;
-  }
-
-  posAttr.needsUpdate = true;
-  geometry.computeVertexNormals();
-  if (normalAttr) normalAttr.needsUpdate = true;
-  geometry.computeBoundingSphere();
-
-  dragStartPoint.copy(newPlanePoint);
+function updatePointer(e) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 }
 
-renderer.domElement.addEventListener('pointerdown', (event) => {
-  const hit = getMeshHit(event);
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  updatePointer(e);
+  raycaster.setFromCamera(pointer, camera);
+  const hit = raycaster.intersectObject(sculptMesh)[0];
   if (!hit) return;
 
-  updatePointerFromEvent(event);
-  startMeshDrag(event, hit);
-  renderer.domElement.setPointerCapture(event.pointerId);
+  isDragging = true;
+  lastHit.copy(sculptMesh.worldToLocal(hit.point.clone()));
+
+  worldNormal.copy(hit.face.normal).transformDirection(sculptMesh.matrixWorld);
+  dragPlane.setFromNormalAndCoplanarPoint(worldNormal, hit.point);
+
+  raycaster.ray.intersectPlane(dragPlane, dragStartPoint);
 });
 
-renderer.domElement.addEventListener('pointermove', (event) => {
-  if (!isDraggingMesh || event.pointerId !== dragPointerId) return;
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!isDragging) return;
 
-  updatePointerFromEvent(event);
+  updatePointer(e);
   raycaster.setFromCamera(pointer, camera);
+
   if (raycaster.ray.intersectPlane(dragPlane, planeHit)) {
-    applySculptDelta(planeHit);
+    const delta = tempVec.copy(planeHit).sub(dragStartPoint);
+    dragStartPoint.copy(planeHit);
+
+    inverseMatrix.copy(sculptMesh.matrixWorld).invert();
+    delta.transformDirection(inverseMatrix);
+
+    for (let i = 0; i < offsets.length; i += 3) {
+      const dx = basePositions[i] - lastHit.x;
+      const dy = basePositions[i + 1] - lastHit.y;
+      const dz = basePositions[i + 2] - lastHit.z;
+      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+      if (dist > sculptRadius) continue;
+
+      const f = (1 - dist / sculptRadius) ** 2 * sculptStrength;
+
+      offsets[i] += delta.x * f;
+      offsets[i+1] += delta.y * f;
+      offsets[i+2] += delta.z * f;
+
+      velocities[i] += delta.x * f * 20;
+      velocities[i+1] += delta.y * f * 20;
+      velocities[i+2] += delta.z * f * 20;
+    }
   }
 });
 
-function endMeshDrag(event) {
-  if (event.pointerId !== dragPointerId) return;
-  isDraggingMesh = false;
-  dragPointerId = null;
-  controls.enabled = true;
+window.addEventListener('pointerup', () => isDragging = false);
+
+resetBtn.onclick = () => {
+  offsets.fill(0);
+  velocities.fill(0);
+};
+
+function updateSpring(dt) {
+  for (let i = 0; i < offsets.length; i++) {
+    velocities[i] += (-offsets[i] * STIFFNESS) * dt;
+    velocities[i] *= DAMPING;
+    offsets[i] += velocities[i] * dt;
+  }
 }
 
-renderer.domElement.addEventListener('pointerup', endMeshDrag);
-renderer.domElement.addEventListener('pointercancel', endMeshDrag);
-renderer.domElement.addEventListener('lostpointercapture', () => {
-  isDraggingMesh = false;
-  dragPointerId = null;
-  controls.enabled = true;
-});
-
-resetBtn.addEventListener('click', () => {
-  if (!sculptMesh || !basePositions) return;
-  const geometry = sculptMesh.geometry;
-  geometry.attributes.position.array.set(basePositions);
-  geometry.attributes.position.needsUpdate = true;
-  geometry.computeVertexNormals();
-  geometry.computeBoundingSphere();
-});
-
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
+function applyOffsets() {
+  const pos = sculptMesh.geometry.attributes.position.array;
+  for (let i = 0; i < pos.length; i++) {
+    pos[i] = basePositions[i] + offsets[i];
+  }
+  sculptMesh.geometry.attributes.position.needsUpdate = true;
+  sculptMesh.geometry.computeVertexNormals();
+}
 
 const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
-  const t = clock.getElapsedTime();
+  const dt = clock.getDelta();
 
-  if (modelRoot) {
-    modelRoot.position.y += Math.sin(t * 1.3) * 0.0009;
+  if (sculptMesh) {
+    updateSpring(dt);
+    applyOffsets();
   }
 
   controls.update();
