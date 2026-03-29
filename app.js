@@ -57,7 +57,7 @@ let basePositions = null;
 let isDraggingMesh = false;
 let dragPointerId = null;
 let sculptRadius = 0.22;
-let sculptStrength = 1.0;
+let sculptStrength = 0.02;
 let lastLocalHit = new THREE.Vector3();
 
 const loader = new GLTFLoader();
